@@ -1,0 +1,20 @@
+{
+  "name": "duo",
+  "description": "Two complementary hosts",
+  "tts_provider": "openai",
+  "tts_model": "gpt-4o-mini-tts",
+  "speakers": [
+    {
+      "name": "Alex",
+      "voice_id": "nova",
+      "backstory": "Tech enthusiast and educator who loves breaking down complex topics",
+      "personality": "Curious, warm, asks great follow-up questions"
+    },
+    {
+      "name": "Sam",
+      "voice_id": "echo",
+      "backstory": "Industry practitioner with hands-on experience",
+      "personality": "Direct, insightful, uses concrete examples"
+    }
+  ]
+}

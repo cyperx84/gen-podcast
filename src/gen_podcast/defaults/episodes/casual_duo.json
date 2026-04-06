@@ -1,0 +1,12 @@
+{
+  "name": "casual_duo",
+  "description": "Two hosts casually discussing a topic",
+  "speaker_config": "duo",
+  "outline_provider": "openai",
+  "outline_model": "gpt-4o",
+  "transcript_provider": "openai",
+  "transcript_model": "gpt-4o",
+  "language": "en-US",
+  "default_briefing": "Create an engaging, casual discussion between two knowledgeable hosts who explore the topic with curiosity and depth.",
+  "num_segments": 5
+}
