@@ -7,6 +7,7 @@ import json
 import sys
 import time
 import uuid
+from typing import Any
 
 import click
 
@@ -38,7 +39,7 @@ def main() -> None:
 @click.option("--stdin", "use_stdin", is_flag=True, help="Read content from stdin")
 @click.option("--briefing", default=None, help="Generation instructions")
 @click.option("--briefing-file", default=None, type=click.Path(exists=True), help="Read briefing from file")
-@click.option("--episode-profile", default="casual_duo", help="Episode profile name")
+@click.option("--episode-profile", default=None, help="Episode profile name")
 @click.option("--speaker-profile", default=None, help="Speaker profile name (overrides episode's speaker_config)")
 @click.option("--name", default=None, help="Episode name")
 @click.option("--outline-provider", default=None, help="Override outline LLM provider")
@@ -50,14 +51,14 @@ def main() -> None:
 @click.option("--foreground", is_flag=True, help="Run synchronously (default: background)")
 @click.option("--job-id", default=None, help="Resume existing job (internal use)")
 @click.option("--output-dir", default=None, type=click.Path(), help="Override output location")
-@click.option("--timeout", default=3600, type=int, help="Generation timeout in seconds (0 = no timeout)")
+@click.option("--timeout", default=None, type=click.INT, help="Generation timeout in seconds (0 = no timeout)")
 def generate(
     content: str | None,
     content_file: str | None,
     use_stdin: bool,
     briefing: str | None,
     briefing_file: str | None,
-    episode_profile: str,
+    episode_profile: str | None,
     speaker_profile: str | None,
     name: str | None,
     outline_provider: str | None,
@@ -69,30 +70,21 @@ def generate(
     foreground: bool,
     job_id: str | None,
     output_dir: str | None,
-    timeout: int,
+    timeout: int | None,
 ) -> None:
     """Generate a podcast from content."""
-    cfg = load_config()
-    if episode_profile == "casual_duo":
-        episode_profile = cfg.get("episode_profile", episode_profile)
-    if speaker_profile is None:
-        speaker_profile = cfg.get("speaker_profile")
-    if output_dir is None:
-        output_dir = cfg.get("output_dir")
-    if timeout == 3600:
-        timeout = int(cfg.get("timeout", timeout))
-    if outline_provider is None:
-        outline_provider = cfg.get("outline_provider")
-    if outline_model is None:
-        outline_model = cfg.get("outline_model")
-    if transcript_provider is None:
-        transcript_provider = cfg.get("transcript_provider")
-    if transcript_model is None:
-        transcript_model = cfg.get("transcript_model")
-    if tts_provider is None:
-        tts_provider = cfg.get("tts_provider")
-    if tts_model is None:
-        tts_model = cfg.get("tts_model")
+    cfg: dict[str, Any] = load_config()
+    # Layer: CLI flag (non-None) > config file > hardcoded default
+    episode_profile = str(episode_profile or cfg.get("episode_profile") or "casual_duo")
+    speaker_profile = speaker_profile or cfg.get("speaker_profile")
+    output_dir = output_dir or cfg.get("output_dir")
+    timeout_secs: int | None = timeout if timeout is not None else cfg.get("timeout", 3600)
+    outline_provider = outline_provider or cfg.get("outline_provider")
+    outline_model = outline_model or cfg.get("outline_model")
+    transcript_provider = transcript_provider or cfg.get("transcript_provider")
+    transcript_model = transcript_model or cfg.get("transcript_model")
+    tts_provider = tts_provider or cfg.get("tts_provider")
+    tts_model = tts_model or cfg.get("tts_model")
 
     # Resolve content
     resolved_content: str | None = None
@@ -160,7 +152,7 @@ def generate(
                 name=name,
                 model_overrides=model_overrides or None,
                 output_dir=output_dir,
-                timeout=timeout or None,
+                timeout=timeout_secs or None,
             )
         )
         _json_out(result)
@@ -177,7 +169,7 @@ def generate(
             name=name,
             model_overrides=model_overrides or None,
             output_dir=output_dir,
-            timeout=timeout or None,
+            timeout=timeout_secs or None,
         )
         _json_out({"job_id": jid, "status": "queued"})
 
@@ -322,8 +314,12 @@ def config_set(key: str, value: str) -> None:
 @click.argument("key")
 def config_unset(key: str) -> None:
     """Remove a config value."""
-    removed = unset_config(key)
-    _json_out({"key": key, "removed": removed})
+    try:
+        removed = unset_config(key)
+        _json_out({"key": key, "removed": removed})
+    except ValueError as e:
+        _json_out({"error": str(e)})
+        sys.exit(2)
 
 
 @config.command(name="reset")

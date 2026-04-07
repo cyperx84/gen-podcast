@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -158,10 +159,15 @@ def delete_job(job_id: str, include_output: bool = False) -> bool:
         except FileNotFoundError:
             pass
     if include_output:
-        import shutil
         out = OUTPUT_DIR / job_id
-        if out.exists():
-            shutil.rmtree(out)
+        # Guard against path traversal via crafted job IDs
+        try:
+            out_resolved = out.resolve()
+            output_dir_resolved = OUTPUT_DIR.resolve()
+            if out_resolved.parent == output_dir_resolved and out_resolved.exists():
+                shutil.rmtree(out_resolved)
+        except (ValueError, OSError):
+            pass  # ignore resolution errors on unusual paths
     return existed
 
 

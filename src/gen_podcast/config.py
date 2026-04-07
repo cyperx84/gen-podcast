@@ -52,6 +52,8 @@ def set_config(key: str, value: str) -> None:
 
 def unset_config(key: str) -> bool:
     """Remove a key from config. Returns True if it existed."""
+    if key not in VALID_CONFIG_KEYS:
+        raise ValueError(f"Unknown config key: {key!r}. Valid keys: {sorted(VALID_CONFIG_KEYS)}")
     data = load_config()
     if key not in data:
         return False

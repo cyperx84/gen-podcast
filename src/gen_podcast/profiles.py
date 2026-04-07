@@ -109,10 +109,12 @@ def validate_speaker_profile(data: dict) -> list[str]:
 
 
 SECRETS_DIR = Path.home() / ".gen-podcast" / "secrets"
+# Deprecated: legacy secrets location, kept for backwards compatibility
+_LEGACY_SECRETS_DIR = Path.home() / ".openclaw" / "secrets"
 
 
 def _get_api_key(provider: str) -> str | None:
-    """Get API key from env var, falling back to ~/.gen-podcast/secrets/."""
+    """Get API key from env var, falling back to ~/.gen-podcast/secrets/ then the legacy ~/.openclaw/secrets/."""
     env_var = PROVIDER_KEY_MAP.get(provider.lower())
     if not env_var:
         return None
@@ -120,11 +122,15 @@ def _get_api_key(provider: str) -> str | None:
     key = os.environ.get(env_var)
     if key:
         return key
-    # Fall back to secrets file
+    # Try new secrets location
     secret_name = env_var.lower().replace("_api_key", "-api-key").replace("_", "-")
     secret_file = SECRETS_DIR / secret_name
     if secret_file.exists():
         return secret_file.read_text().strip()
+    # Fallback: legacy ~/.openclaw/secrets/ location
+    legacy_file = _LEGACY_SECRETS_DIR / secret_name
+    if legacy_file.exists():
+        return legacy_file.read_text().strip()
     return None
 
 
