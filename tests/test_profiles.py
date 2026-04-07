@@ -77,7 +77,7 @@ class TestInjectApiKeys:
     def test_multiple_providers(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anth")
-        episode = {"outline_provider": "openai", "transcript_provider": "anthropic"}
+        episode: dict[str, Any] = {"outline_provider": "openai", "transcript_provider": "anthropic"}
         mod.inject_api_keys(episode, None)
         assert episode["outline_config"]["api_key"] == "sk-openai"
         assert episode["transcript_config"]["api_key"] == "sk-anth"
@@ -145,3 +145,69 @@ class TestIsValidSpeakerProfile:
 
     def test_unknown_is_invalid(self, tmp_dirs):
         assert mod.is_valid_speaker_profile("does_not_exist") is False
+
+
+class TestValidateEpisodeProfile:
+    def _valid(self) -> dict:
+        return {
+            "name": "test_ep",
+            "outline_provider": "openai",
+            "transcript_provider": "anthropic",
+        }
+
+    def test_valid_profile_returns_empty(self):
+        assert mod.validate_episode_profile(self._valid()) == []
+
+    def test_missing_name_returns_error(self):
+        data = self._valid()
+        del data["name"]
+        errors = mod.validate_episode_profile(data)
+        assert any("name" in e for e in errors)
+
+    def test_missing_outline_provider_returns_error(self):
+        data = self._valid()
+        del data["outline_provider"]
+        errors = mod.validate_episode_profile(data)
+        assert any("outline_provider" in e for e in errors)
+
+    def test_unknown_outline_provider_returns_error(self):
+        data = self._valid()
+        data["outline_provider"] = "unknown_llm"
+        errors = mod.validate_episode_profile(data)
+        assert any("unknown_llm" in e for e in errors)
+
+    def test_unknown_transcript_provider_returns_error(self):
+        data = self._valid()
+        data["transcript_provider"] = "bad_provider"
+        errors = mod.validate_episode_profile(data)
+        assert any("bad_provider" in e for e in errors)
+
+
+class TestValidateSpeakerProfile:
+    def _valid(self) -> dict:
+        return {
+            "name": "test_speaker",
+            "tts_provider": "openai",
+            "speakers": [{"name": "Alice"}],
+        }
+
+    def test_valid_profile_returns_empty(self):
+        assert mod.validate_speaker_profile(self._valid()) == []
+
+    def test_missing_name_returns_error(self):
+        data = self._valid()
+        del data["name"]
+        errors = mod.validate_speaker_profile(data)
+        assert any("name" in e for e in errors)
+
+    def test_unknown_tts_provider_returns_error(self):
+        data = self._valid()
+        data["tts_provider"] = "bad_tts"
+        errors = mod.validate_speaker_profile(data)
+        assert any("bad_tts" in e for e in errors)
+
+    def test_speakers_non_list_returns_error(self):
+        data = self._valid()
+        data["speakers"] = "not_a_list"
+        errors = mod.validate_speaker_profile(data)
+        assert any("speakers" in e for e in errors)

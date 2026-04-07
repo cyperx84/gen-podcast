@@ -71,11 +71,48 @@ def is_valid_speaker_profile(name: str) -> bool:
     return _find_profile("speakers", name) is not None
 
 
-SECRETS_DIR = Path.home() / ".openclaw" / "secrets"
+# Required keys for profile validation
+_EPISODE_REQUIRED_KEYS = frozenset({"name", "outline_provider", "transcript_provider"})
+_SPEAKER_REQUIRED_KEYS = frozenset({"name", "tts_provider"})
+
+
+def validate_episode_profile(data: dict) -> list[str]:
+    """Return a list of validation errors for an episode profile dict.
+
+    Returns empty list if valid.
+    """
+    errors: list[str] = []
+    for key in _EPISODE_REQUIRED_KEYS:
+        if key not in data:
+            errors.append(f"Missing required key: {key!r}")
+    if "outline_provider" in data and data["outline_provider"] not in PROVIDER_KEY_MAP:
+        errors.append(f"Unknown outline_provider: {data['outline_provider']!r}. Known providers: {sorted(PROVIDER_KEY_MAP)}")
+    if "transcript_provider" in data and data["transcript_provider"] not in PROVIDER_KEY_MAP:
+        errors.append(f"Unknown transcript_provider: {data['transcript_provider']!r}. Known providers: {sorted(PROVIDER_KEY_MAP)}")
+    return errors
+
+
+def validate_speaker_profile(data: dict) -> list[str]:
+    """Return a list of validation errors for a speaker profile dict.
+
+    Returns empty list if valid.
+    """
+    errors: list[str] = []
+    for key in _SPEAKER_REQUIRED_KEYS:
+        if key not in data:
+            errors.append(f"Missing required key: {key!r}")
+    if "tts_provider" in data and data["tts_provider"] not in PROVIDER_KEY_MAP:
+        errors.append(f"Unknown tts_provider: {data['tts_provider']!r}. Known providers: {sorted(PROVIDER_KEY_MAP)}")
+    if "speakers" in data and not isinstance(data["speakers"], list):
+        errors.append("'speakers' must be a list")
+    return errors
+
+
+SECRETS_DIR = Path.home() / ".gen-podcast" / "secrets"
 
 
 def _get_api_key(provider: str) -> str | None:
-    """Get API key from env var, falling back to ~/.openclaw/secrets/."""
+    """Get API key from env var, falling back to ~/.gen-podcast/secrets/."""
     env_var = PROVIDER_KEY_MAP.get(provider.lower())
     if not env_var:
         return None

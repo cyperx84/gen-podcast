@@ -260,3 +260,129 @@ class TestDeleteCommand:
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert "error" in data
+
+
+class TestConfigCommands:
+    """Tests for `gen-podcast config` subcommands."""
+
+    @pytest.fixture(autouse=True)
+    def tmp_config_path(self, tmp_path, monkeypatch):
+        from gen_podcast import config as config_mod
+        monkeypatch.setattr(config_mod, "CONFIG_PATH", tmp_path / "config.json")
+        return tmp_path / "config.json"
+
+    def test_config_show_empty(self, runner):
+        result = runner.invoke(main, ["config", "show"])
+        assert result.exit_code == 0
+        assert json.loads(result.output) == {}
+
+    def test_config_set_and_show(self, runner):
+        result = runner.invoke(main, ["config", "set", "episode_profile", "tech_discussion"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["key"] == "episode_profile"
+
+        result = runner.invoke(main, ["config", "show"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["episode_profile"] == "tech_discussion"
+
+    def test_config_set_bad_key_exits_2(self, runner):
+        result = runner.invoke(main, ["config", "set", "invalid_key", "value"])
+        assert result.exit_code == 2
+        data = json.loads(result.output)
+        assert "error" in data
+
+    def test_config_set_bad_value_exits_2(self, runner):
+        result = runner.invoke(main, ["config", "set", "timeout", "abc"])
+        assert result.exit_code == 2
+        data = json.loads(result.output)
+        assert "error" in data
+
+    def test_config_unset(self, runner):
+        runner.invoke(main, ["config", "set", "episode_profile", "tech_discussion"])
+        result = runner.invoke(main, ["config", "unset", "episode_profile"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["removed"] is True
+
+        # Verify it's gone
+        result = runner.invoke(main, ["config", "show"])
+        data = json.loads(result.output)
+        assert "episode_profile" not in data
+
+    def test_config_reset(self, runner):
+        runner.invoke(main, ["config", "set", "episode_profile", "tech_discussion"])
+        result = runner.invoke(main, ["config", "reset"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["reset"] is True
+
+        # Config should be empty after reset
+        result = runner.invoke(main, ["config", "show"])
+        data = json.loads(result.output)
+        assert data == {}
+
+
+class TestCleanupWithIncludeOutput:
+    def test_cleanup_include_output_flag_accepted(self, runner, tmp_jobs_dir):
+        from gen_podcast import status as status_mod2
+        with patch("gen_podcast.cli.cleanup_jobs", return_value=[]) as mock_cleanup:
+            result = runner.invoke(main, ["cleanup", "--include-output"])
+        assert result.exit_code == 0
+        mock_cleanup.assert_called_once()
+        _, kwargs = mock_cleanup.call_args
+        assert kwargs.get("include_output") is True
+
+    def test_cleanup_without_flag_passes_false(self, runner, tmp_jobs_dir):
+        with patch("gen_podcast.cli.cleanup_jobs", return_value=[]) as mock_cleanup:
+            result = runner.invoke(main, ["cleanup"])
+        assert result.exit_code == 0
+        mock_cleanup.assert_called_once()
+        _, kwargs = mock_cleanup.call_args
+        assert kwargs.get("include_output") is False
+
+
+class TestDeleteWithIncludeOutput:
+    def test_delete_include_output_flag_accepted(self, runner, tmp_jobs_dir):
+        status_mod.create_job("del_out_job", {})
+        status_mod.update_job("del_out_job", status="completed")
+        with patch("gen_podcast.cli.delete_job", return_value=True) as mock_del:
+            result = runner.invoke(main, ["delete", "del_out_job", "--include-output"])
+        assert result.exit_code == 0
+        mock_del.assert_called_once_with("del_out_job", include_output=True)
+
+    def test_delete_without_flag_passes_false(self, runner, tmp_jobs_dir):
+        status_mod.create_job("del_no_out", {})
+        status_mod.update_job("del_no_out", status="completed")
+        with patch("gen_podcast.cli.delete_job", return_value=True) as mock_del:
+            result = runner.invoke(main, ["delete", "del_no_out"])
+        assert result.exit_code == 0
+        mock_del.assert_called_once_with("del_no_out", include_output=False)
+
+
+class TestGenerateWithConfigDefaults:
+    @pytest.fixture(autouse=True)
+    def tmp_config_path(self, tmp_path, monkeypatch):
+        from gen_podcast import config as config_mod
+        monkeypatch.setattr(config_mod, "CONFIG_PATH", tmp_path / "config.json")
+        return tmp_path / "config.json"
+
+    def test_config_episode_profile_used_when_flag_not_given(self, runner, tmp_jobs_dir, tmp_path, monkeypatch):
+        from gen_podcast import config as config_mod
+        # Set config default
+        config_mod.set_config("episode_profile", "tech_discussion")
+
+        with patch("gen_podcast.cli.spawn_background", return_value="cfg_job") as mock_spawn:
+            result = runner.invoke(
+                main,
+                ["generate", "--content", "test content"],
+            )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["job_id"] == "cfg_job"
+
+        # The episode profile from config should be passed to spawn_background
+        mock_spawn.assert_called_once()
+        _, kwargs = mock_spawn.call_args
+        assert kwargs.get("episode_profile_name") == "tech_discussion"

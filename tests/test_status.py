@@ -199,3 +199,90 @@ class TestCleanupJobs:
         self._make_old_job("running_old", days_ago=40, terminal=False)
         deleted = mod.cleanup_jobs(older_than_days=30, terminal_only=False)
         assert "running_old" in deleted
+
+
+@pytest.fixture
+def tmp_output_dir(tmp_path, monkeypatch):
+    out = tmp_path / "output"
+    out.mkdir()
+    monkeypatch.setattr(mod, "OUTPUT_DIR", out)
+    return out
+
+
+class TestDeleteJobWithOutput:
+    def test_include_output_removes_output_dir(self, tmp_jobs_dir, tmp_output_dir):
+        mod.create_job("out1", {})
+        mod.update_job("out1", status="completed")
+        job_out = tmp_output_dir / "out1"
+        job_out.mkdir()
+        (job_out / "episode.mp3").write_text("audio")
+
+        mod.delete_job("out1", include_output=True)
+
+        assert not (tmp_jobs_dir / "out1.json").exists()
+        assert not job_out.exists()
+
+    def test_include_output_false_keeps_output_dir(self, tmp_jobs_dir, tmp_output_dir):
+        mod.create_job("out2", {})
+        mod.update_job("out2", status="completed")
+        job_out = tmp_output_dir / "out2"
+        job_out.mkdir()
+        (job_out / "episode.mp3").write_text("audio")
+
+        mod.delete_job("out2", include_output=False)
+
+        assert not (tmp_jobs_dir / "out2.json").exists()
+        assert job_out.exists()
+
+    def test_include_output_no_output_dir_is_noop(self, tmp_jobs_dir, tmp_output_dir):
+        mod.create_job("out3", {})
+        mod.update_job("out3", status="completed")
+        # No output dir created for this job
+        result = mod.delete_job("out3", include_output=True)
+        assert result is True
+
+
+class TestCleanupJobsWithOutput:
+    def _make_old_job(self, job_id, days_ago, terminal=True):
+        from datetime import datetime, timezone, timedelta
+        mod.create_job(job_id, {})
+        old_time = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+        if terminal:
+            mod.update_job(job_id, status="completed", started_at=old_time, completed_at=old_time)
+        else:
+            mod.update_job(job_id, started_at=old_time)
+
+    def test_include_output_removes_output_dir(self, tmp_jobs_dir, tmp_output_dir):
+        self._make_old_job("cln1", days_ago=40)
+        job_out = tmp_output_dir / "cln1"
+        job_out.mkdir()
+        (job_out / "episode.mp3").write_text("audio")
+
+        deleted = mod.cleanup_jobs(older_than_days=30, include_output=True)
+
+        assert "cln1" in deleted
+        assert not job_out.exists()
+
+    def test_include_output_false_keeps_output_dir(self, tmp_jobs_dir, tmp_output_dir):
+        self._make_old_job("cln2", days_ago=40)
+        job_out = tmp_output_dir / "cln2"
+        job_out.mkdir()
+        (job_out / "episode.mp3").write_text("audio")
+
+        deleted = mod.cleanup_jobs(older_than_days=30, include_output=False)
+
+        assert "cln2" in deleted
+        assert job_out.exists()
+
+    def test_malformed_started_at_is_skipped(self, tmp_jobs_dir):
+        mod.create_job("bad_date", {})
+        mod.update_job("bad_date", status="completed")
+        # Manually overwrite the file with a bad started_at
+        job_path = tmp_jobs_dir / "bad_date.json"
+        data = json.loads(job_path.read_text())
+        data["started_at"] = "not-a-date"
+        job_path.write_text(json.dumps(data))
+
+        # Should not raise, should just skip the malformed job
+        deleted = mod.cleanup_jobs(older_than_days=0)
+        assert "bad_date" not in deleted
