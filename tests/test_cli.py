@@ -147,3 +147,116 @@ class TestProfiles:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "count" in data
+
+
+class TestGenerateProfileValidation:
+    def test_invalid_episode_profile_exits_2(self, runner, monkeypatch):
+        from gen_podcast import profiles as prof_mod
+        monkeypatch.setattr(prof_mod, "USER_PROFILES_DIR", Path("/nonexistent/user"))
+        monkeypatch.setattr(prof_mod, "DEFAULTS_DIR", Path("/nonexistent/defaults"))
+        result = runner.invoke(
+            main,
+            ["generate", "--content", "hello", "--episode-profile", "bogus_profile"],
+        )
+        assert result.exit_code == 2
+        data = json.loads(result.output)
+        assert "error" in data
+        assert "bogus_profile" in data["error"]
+
+    def test_invalid_speaker_profile_exits_2(self, runner, tmp_path, monkeypatch):
+        from gen_podcast import profiles as prof_mod
+        # Create a valid episode profile file so that passes
+        defaults_dir = tmp_path / "defaults"
+        (defaults_dir / "episodes").mkdir(parents=True)
+        (defaults_dir / "episodes" / "casual_duo.json").write_text('{"name": "casual_duo"}')
+        (defaults_dir / "speakers").mkdir(parents=True)
+        monkeypatch.setattr(prof_mod, "DEFAULTS_DIR", defaults_dir)
+        monkeypatch.setattr(prof_mod, "USER_PROFILES_DIR", tmp_path / "user")
+        result = runner.invoke(
+            main,
+            ["generate", "--content", "hello", "--speaker-profile", "bogus_speaker"],
+        )
+        assert result.exit_code == 2
+        data = json.loads(result.output)
+        assert "error" in data
+        assert "bogus_speaker" in data["error"]
+
+    def test_valid_profile_proceeds(self, runner, monkeypatch):
+        with patch("gen_podcast.cli.spawn_background", return_value="job123"):
+            result = runner.invoke(
+                main,
+                ["generate", "--content", "hello"],
+            )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["job_id"] == "job123"
+
+
+class TestStatusPidCheck:
+    def test_dead_pid_marks_failed(self, runner, tmp_jobs_dir, monkeypatch):
+        status_mod.create_job("j_dead", {})
+        status_mod.update_job("j_dead", status="running", pid=99999)
+
+        monkeypatch.setattr("gen_podcast.cli.is_process_alive", lambda pid: False)
+
+        result = runner.invoke(main, ["status", "j_dead"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "failed"
+        assert "died" in data["error"].lower() or "alive" in data["error"].lower()
+
+    def test_alive_pid_keeps_status(self, runner, tmp_jobs_dir, monkeypatch):
+        status_mod.create_job("j_alive", {})
+        status_mod.update_job("j_alive", status="running", pid=12345)
+
+        monkeypatch.setattr("gen_podcast.cli.is_process_alive", lambda pid: True)
+
+        result = runner.invoke(main, ["status", "j_alive"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "running"
+
+
+class TestCleanupCommand:
+    def test_cleanup_returns_json(self, runner, tmp_jobs_dir):
+        result = runner.invoke(main, ["cleanup"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "deleted" in data
+        assert "count" in data
+
+    def test_cleanup_deletes_old_jobs(self, runner, tmp_jobs_dir):
+        from datetime import datetime, timezone, timedelta
+        status_mod.create_job("old_job", {})
+        old_time = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+        status_mod.update_job("old_job", status="completed", started_at=old_time, completed_at=old_time)
+
+        result = runner.invoke(main, ["cleanup", "--days", "30"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["count"] == 1
+        assert "old_job" in data["deleted"]
+
+
+class TestDeleteCommand:
+    def test_delete_terminal_job(self, runner, tmp_jobs_dir):
+        status_mod.create_job("to_del", {})
+        status_mod.update_job("to_del", status="completed")
+        result = runner.invoke(main, ["delete", "to_del"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["deleted"] == "to_del"
+
+    def test_delete_missing_job_exits_1(self, runner, tmp_jobs_dir):
+        result = runner.invoke(main, ["delete", "ghost_job"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert "error" in data
+
+    def test_delete_running_job_exits_1(self, runner, tmp_jobs_dir):
+        status_mod.create_job("active_job", {})
+        status_mod.update_job("active_job", status="running")
+        result = runner.invoke(main, ["delete", "active_job"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert "error" in data

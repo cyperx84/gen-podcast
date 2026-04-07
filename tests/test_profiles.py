@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -29,12 +30,14 @@ class TestLoadEpisodeProfile:
     def test_loads_from_defaults(self, tmp_dirs):
         _write_profile(tmp_dirs["defaults"], "episodes", "test_ep", {"name": "test_ep"})
         result = mod.load_episode_profile("test_ep")
+        assert result is not None
         assert result == {"name": "test_ep"}
 
     def test_user_overrides_default(self, tmp_dirs):
         _write_profile(tmp_dirs["defaults"], "episodes", "ep", {"name": "default"})
         _write_profile(tmp_dirs["user"], "episodes", "ep", {"name": "user"})
         result = mod.load_episode_profile("ep")
+        assert result is not None
         assert result["name"] == "user"
 
     def test_returns_none_for_builtin(self, tmp_dirs):
@@ -54,8 +57,8 @@ class TestLoadSpeakerProfile:
 class TestInjectApiKeys:
     def test_injects_openai_key(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        episode = {"outline_provider": "openai", "transcript_provider": "openai"}
-        speaker = {"tts_provider": "openai"}
+        episode: dict[str, Any] = {"outline_provider": "openai", "transcript_provider": "openai"}
+        speaker: dict[str, Any] = {"tts_provider": "openai"}
         mod.inject_api_keys(episode, speaker)
         assert episode["outline_config"]["api_key"] == "sk-test"
         assert episode["transcript_config"]["api_key"] == "sk-test"
@@ -113,3 +116,32 @@ class TestInitProfiles:
         assert len(copied) == 0
         data = json.loads((tmp_dirs["user"] / "episodes" / "ep1.json").read_text())
         assert data["name"] == "user"
+
+
+class TestIsValidEpisodeProfile:
+    def test_builtin_is_valid(self, tmp_dirs):
+        # tech_discussion is a builtin
+        assert mod.is_valid_episode_profile("tech_discussion") is True
+
+    def test_file_profile_is_valid(self, tmp_dirs):
+        _write_profile(tmp_dirs["defaults"], "episodes", "my_ep", {"name": "my_ep"})
+        assert mod.is_valid_episode_profile("my_ep") is True
+
+    def test_unknown_is_invalid(self, tmp_dirs):
+        assert mod.is_valid_episode_profile("does_not_exist") is False
+
+    def test_user_profile_is_valid(self, tmp_dirs):
+        _write_profile(tmp_dirs["user"], "episodes", "user_ep", {"name": "user_ep"})
+        assert mod.is_valid_episode_profile("user_ep") is True
+
+
+class TestIsValidSpeakerProfile:
+    def test_builtin_is_valid(self, tmp_dirs):
+        assert mod.is_valid_speaker_profile("tech_experts") is True
+
+    def test_file_profile_is_valid(self, tmp_dirs):
+        _write_profile(tmp_dirs["defaults"], "speakers", "my_sp", {"name": "my_sp"})
+        assert mod.is_valid_speaker_profile("my_sp") is True
+
+    def test_unknown_is_invalid(self, tmp_dirs):
+        assert mod.is_valid_speaker_profile("does_not_exist") is False

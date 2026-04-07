@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
 import traceback
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from gen_podcast.profiles import inject_api_keys, load_episode_profile, load_speaker_profile
@@ -13,6 +15,8 @@ from gen_podcast.status import TERMINAL_STATUSES, create_job, read_job, update_j
 
 OUTPUT_DIR = Path.home() / ".gen-podcast" / "output"
 JOBS_DIR = Path.home() / ".gen-podcast" / "jobs"
+
+DEFAULT_TIMEOUT = 3600
 
 
 def _build_config_dict(
@@ -43,6 +47,7 @@ async def run_foreground(
     name: str | None,
     model_overrides: dict | None = None,
     output_dir: str | None = None,
+    timeout: int | None = DEFAULT_TIMEOUT,
 ) -> dict:
     """Run podcast generation synchronously. Returns the final job status dict."""
     from podcast_creator import configure, create_podcast
@@ -50,6 +55,19 @@ async def run_foreground(
     episode_name = name or job_id
     out = Path(output_dir) if output_dir else OUTPUT_DIR / job_id
     out.mkdir(parents=True, exist_ok=True)
+
+    def _to_json_safe(obj):
+        if obj is None:
+            return None
+        if isinstance(obj, list):
+            return [_to_json_safe(i) for i in obj]
+        if isinstance(obj, dict):
+            return {k: _to_json_safe(v) for k, v in obj.items()}
+        if hasattr(obj, "model_dump"):
+            return _to_json_safe(obj.model_dump())
+        if hasattr(obj, "__dict__"):
+            return _to_json_safe(obj.__dict__)
+        return obj
 
     try:
         update_job(job_id, status="running", phase="loading_profiles")
@@ -102,7 +120,7 @@ async def run_foreground(
 
         # Generate
         update_job(job_id, status="generating_outline", phase="outline")
-        result = await create_podcast(
+        coro = create_podcast(
             content=content,
             briefing=effective_briefing,
             episode_name=episode_name,
@@ -110,12 +128,16 @@ async def run_foreground(
             speaker_config=speaker_name or "",
             episode_profile=episode_profile_name,
         )
+        if timeout is not None:
+            result = await asyncio.wait_for(coro, timeout=timeout)
+        else:
+            result = await coro
 
         # Success
         output_data = {
-            "audio_file": result.get("final_output_file_path"),
-            "transcript": result.get("transcript"),
-            "outline": result.get("outline"),
+            "audio_file": str(result.get("final_output_file_path", "")),
+            "transcript": _to_json_safe(result.get("transcript")),
+            "outline": _to_json_safe(result.get("outline")),
             "output_dir": str(out),
         }
         job = update_job(
@@ -123,9 +145,18 @@ async def run_foreground(
             status="completed",
             phase=None,
             output=output_data,
-            completed_at=__import__("datetime")
-            .datetime.now(__import__("datetime").timezone.utc)
-            .isoformat(),
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        return job.to_dict()
+
+    except asyncio.TimeoutError:
+        error_msg = f"Generation timed out after {timeout} seconds"
+        job = update_job(
+            job_id,
+            status="failed",
+            phase=None,
+            error=error_msg,
+            completed_at=datetime.now(timezone.utc).isoformat(),
         )
         return job.to_dict()
 
@@ -136,9 +167,7 @@ async def run_foreground(
             status="failed",
             phase=None,
             error=error_msg,
-            completed_at=__import__("datetime")
-            .datetime.now(__import__("datetime").timezone.utc)
-            .isoformat(),
+            completed_at=datetime.now(timezone.utc).isoformat(),
         )
         return job.to_dict()
 
@@ -152,6 +181,7 @@ def spawn_background(
     name: str | None,
     model_overrides: dict | None = None,
     output_dir: str | None = None,
+    timeout: int | None = DEFAULT_TIMEOUT,
 ) -> str:
     """Spawn a background generation process. Returns the job ID."""
     job_id = uuid.uuid4().hex[:12]
@@ -188,6 +218,8 @@ def spawn_background(
         cmd.extend(["--name", name])
     if output_dir:
         cmd.extend(["--output-dir", output_dir])
+    if timeout is not None:
+        cmd.extend(["--timeout", str(timeout)])
 
     if model_overrides:
         for key, value in model_overrides.items():
@@ -205,6 +237,7 @@ def spawn_background(
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
     )
+    log_file.close()
     update_job(job_id, pid=proc.pid)
 
     return job_id
