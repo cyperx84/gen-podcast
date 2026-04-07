@@ -216,12 +216,16 @@ def cleanup(days: int, all_statuses: bool) -> None:
 @click.argument("job_id")
 def delete(job_id: str) -> None:
     """Delete a job and its associated files."""
-    removed = delete_job(job_id)
-    if removed:
-        _json_out({"deleted": job_id})
-    else:
+    job = read_job(job_id)
+    if not job:
         _json_out({"error": f"Job {job_id} not found"})
         sys.exit(1)
+    from gen_podcast.status import TERMINAL_STATUSES
+    if job.status not in TERMINAL_STATUSES:
+        _json_out({"error": f"Job {job_id} is still {job.status!r}. Only terminal jobs can be deleted."})
+        sys.exit(1)
+    delete_job(job_id)
+    _json_out({"deleted": job_id})
 
 
 @main.group()

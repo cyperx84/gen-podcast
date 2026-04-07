@@ -135,8 +135,8 @@ class TestIsProcessAlive:
         def fake_kill(pid, sig):
             raise PermissionError
         monkeypatch.setattr("os.kill", fake_kill)
-        # PermissionError means process exists but we can't signal it
-        assert mod.is_process_alive(1) is False
+        # PermissionError means process exists but we can't signal it — treat as alive
+        assert mod.is_process_alive(1) is True
 
 
 class TestDeleteJob:

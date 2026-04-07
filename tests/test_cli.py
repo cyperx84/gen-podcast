@@ -239,8 +239,9 @@ class TestCleanupCommand:
 
 
 class TestDeleteCommand:
-    def test_delete_existing_job(self, runner, tmp_jobs_dir):
+    def test_delete_terminal_job(self, runner, tmp_jobs_dir):
         status_mod.create_job("to_del", {})
+        status_mod.update_job("to_del", status="completed")
         result = runner.invoke(main, ["delete", "to_del"])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -248,6 +249,14 @@ class TestDeleteCommand:
 
     def test_delete_missing_job_exits_1(self, runner, tmp_jobs_dir):
         result = runner.invoke(main, ["delete", "ghost_job"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert "error" in data
+
+    def test_delete_running_job_exits_1(self, runner, tmp_jobs_dir):
+        status_mod.create_job("active_job", {})
+        status_mod.update_job("active_job", status="running")
+        result = runner.invoke(main, ["delete", "active_job"])
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert "error" in data

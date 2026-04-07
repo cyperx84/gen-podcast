@@ -51,12 +51,18 @@ def _now_iso() -> str:
 
 
 def is_process_alive(pid: int) -> bool:
-    """Return True if the process with the given PID is alive."""
+    """Return True if the process with the given PID is alive.
+
+    PermissionError means the process exists but we can't signal it (e.g. different user),
+    so we conservatively treat it as alive to avoid falsely marking jobs as failed.
+    """
     try:
         os.kill(pid, 0)
         return True
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError:
         return False
+    except PermissionError:
+        return True  # process exists, just not ours to signal
 
 
 def _job_path(job_id: str) -> Path:
