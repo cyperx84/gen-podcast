@@ -229,15 +229,14 @@ def spawn_background(
 
     # Spawn detached process
     log_path = JOBS_DIR / f"{job_id}.log"
-    log_file = open(log_path, "w")
-    proc = subprocess.Popen(
-        cmd,
-        start_new_session=True,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.DEVNULL,
-    )
-    log_file.close()
+    with open(log_path, "w") as log_file:
+        proc = subprocess.Popen(
+            cmd,
+            start_new_session=True,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+        )
     update_job(job_id, pid=proc.pid)
 
     return job_id

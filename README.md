@@ -337,18 +337,18 @@ gen-podcast generate --content "..." --episode-profile my_profile
 
 ## API Keys
 
-API keys are read from environment variables first, then from `~/.openclaw/secrets/` as a fallback (one key per file, named after the lowercase env var with `_api_key` replaced by `-api-key`).
+API keys are read from environment variables first, then from `~/.gen-podcast/secrets/` as a fallback (one key per file, named after the lowercase env var with `_api_key` replaced by `-api-key`).
 
 | Provider | Environment Variable | Secrets file |
 |----------|---------------------|--------------|
-| OpenAI | `OPENAI_API_KEY` | `~/.openclaw/secrets/openai-api-key` |
-| Anthropic | `ANTHROPIC_API_KEY` | `~/.openclaw/secrets/anthropic-api-key` |
-| Google | `GOOGLE_API_KEY` | `~/.openclaw/secrets/google-api-key` |
-| Groq | `GROQ_API_KEY` | `~/.openclaw/secrets/groq-api-key` |
-| Mistral | `MISTRAL_API_KEY` | `~/.openclaw/secrets/mistral-api-key` |
-| DeepSeek | `DEEPSEEK_API_KEY` | `~/.openclaw/secrets/deepseek-api-key` |
-| xAI | `XAI_API_KEY` | `~/.openclaw/secrets/xai-api-key` |
-| ElevenLabs | `ELEVENLABS_API_KEY` | `~/.openclaw/secrets/elevenlabs-api-key` |
+| OpenAI | `OPENAI_API_KEY` | `~/.gen-podcast/secrets/openai-api-key` |
+| Anthropic | `ANTHROPIC_API_KEY` | `~/.gen-podcast/secrets/anthropic-api-key` |
+| Google | `GOOGLE_API_KEY` | `~/.gen-podcast/secrets/google-api-key` |
+| Groq | `GROQ_API_KEY` | `~/.gen-podcast/secrets/groq-api-key` |
+| Mistral | `MISTRAL_API_KEY` | `~/.gen-podcast/secrets/mistral-api-key` |
+| DeepSeek | `DEEPSEEK_API_KEY` | `~/.gen-podcast/secrets/deepseek-api-key` |
+| xAI | `XAI_API_KEY` | `~/.gen-podcast/secrets/xai-api-key` |
+| ElevenLabs | `ELEVENLABS_API_KEY` | `~/.gen-podcast/secrets/elevenlabs-api-key` |
 
 ---
 

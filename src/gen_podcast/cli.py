@@ -7,12 +7,14 @@ import json
 import sys
 import time
 import uuid
+from typing import Any
 
 import click
 
-from gen_podcast.profiles import init_profiles, is_valid_episode_profile, is_valid_speaker_profile, list_profiles, load_episode_profile, load_speaker_profile
+from gen_podcast.config import load_config, reset_config, set_config, unset_config
+from gen_podcast.profiles import init_profiles, is_valid_episode_profile, is_valid_speaker_profile, list_profiles, load_episode_profile, load_speaker_profile, validate_episode_profile, validate_speaker_profile
 from gen_podcast.runner import is_job_done, run_foreground, spawn_background
-from gen_podcast.status import cleanup_jobs, create_job, delete_job, is_process_alive, latest_job, list_jobs, read_job, update_job
+from gen_podcast.status import TERMINAL_STATUSES, cleanup_jobs, create_job, delete_job, is_process_alive, latest_job, list_jobs, read_job, update_job
 
 
 def _json_out(data: object) -> None:
@@ -37,7 +39,7 @@ def main() -> None:
 @click.option("--stdin", "use_stdin", is_flag=True, help="Read content from stdin")
 @click.option("--briefing", default=None, help="Generation instructions")
 @click.option("--briefing-file", default=None, type=click.Path(exists=True), help="Read briefing from file")
-@click.option("--episode-profile", default="casual_duo", help="Episode profile name")
+@click.option("--episode-profile", default=None, help="Episode profile name")
 @click.option("--speaker-profile", default=None, help="Speaker profile name (overrides episode's speaker_config)")
 @click.option("--name", default=None, help="Episode name")
 @click.option("--outline-provider", default=None, help="Override outline LLM provider")
@@ -49,14 +51,14 @@ def main() -> None:
 @click.option("--foreground", is_flag=True, help="Run synchronously (default: background)")
 @click.option("--job-id", default=None, help="Resume existing job (internal use)")
 @click.option("--output-dir", default=None, type=click.Path(), help="Override output location")
-@click.option("--timeout", default=3600, type=int, help="Generation timeout in seconds (0 = no timeout)")
+@click.option("--timeout", default=None, type=click.INT, help="Generation timeout in seconds (0 = no timeout)")
 def generate(
     content: str | None,
     content_file: str | None,
     use_stdin: bool,
     briefing: str | None,
     briefing_file: str | None,
-    episode_profile: str,
+    episode_profile: str | None,
     speaker_profile: str | None,
     name: str | None,
     outline_provider: str | None,
@@ -68,9 +70,22 @@ def generate(
     foreground: bool,
     job_id: str | None,
     output_dir: str | None,
-    timeout: int,
+    timeout: int | None,
 ) -> None:
     """Generate a podcast from content."""
+    cfg: dict[str, Any] = load_config()
+    # Layer: CLI flag (non-None) > config file > hardcoded default
+    episode_profile = str(episode_profile or cfg.get("episode_profile") or "casual_duo")
+    speaker_profile = speaker_profile or cfg.get("speaker_profile")
+    output_dir = output_dir or cfg.get("output_dir")
+    timeout_secs: int | None = timeout if timeout is not None else cfg.get("timeout", 3600)
+    outline_provider = outline_provider or cfg.get("outline_provider")
+    outline_model = outline_model or cfg.get("outline_model")
+    transcript_provider = transcript_provider or cfg.get("transcript_provider")
+    transcript_model = transcript_model or cfg.get("transcript_model")
+    tts_provider = tts_provider or cfg.get("tts_provider")
+    tts_model = tts_model or cfg.get("tts_model")
+
     # Resolve content
     resolved_content: str | None = None
     if use_stdin:
@@ -137,7 +152,7 @@ def generate(
                 name=name,
                 model_overrides=model_overrides or None,
                 output_dir=output_dir,
-                timeout=timeout or None,
+                timeout=timeout_secs or None,
             )
         )
         _json_out(result)
@@ -154,7 +169,7 @@ def generate(
             name=name,
             model_overrides=model_overrides or None,
             output_dir=output_dir,
-            timeout=timeout or None,
+            timeout=timeout_secs or None,
         )
         _json_out({"job_id": jid, "status": "queued"})
 
@@ -206,25 +221,26 @@ def list_cmd(status_filter: str | None, limit: int) -> None:
 @main.command()
 @click.option("--days", default=30, type=int, help="Delete jobs older than this many days")
 @click.option("--all-statuses", is_flag=True, help="Include non-terminal jobs (default: terminal only)")
-def cleanup(days: int, all_statuses: bool) -> None:
+@click.option("--include-output", is_flag=True, help="Also delete output audio/transcript files")
+def cleanup(days: int, all_statuses: bool, include_output: bool) -> None:
     """Delete old job files."""
-    deleted = cleanup_jobs(older_than_days=days, terminal_only=not all_statuses)
+    deleted = cleanup_jobs(older_than_days=days, terminal_only=not all_statuses, include_output=include_output)
     _json_out({"deleted": deleted, "count": len(deleted)})
 
 
 @main.command()
 @click.argument("job_id")
-def delete(job_id: str) -> None:
+@click.option("--include-output", is_flag=True, help="Also delete output audio/transcript files")
+def delete(job_id: str, include_output: bool) -> None:
     """Delete a job and its associated files."""
     job = read_job(job_id)
     if not job:
         _json_out({"error": f"Job {job_id} not found"})
         sys.exit(1)
-    from gen_podcast.status import TERMINAL_STATUSES
     if job.status not in TERMINAL_STATUSES:
         _json_out({"error": f"Job {job_id} is still {job.status!r}. Only terminal jobs can be deleted."})
         sys.exit(1)
-    delete_job(job_id)
+    delete_job(job_id, include_output=include_output)
     _json_out({"deleted": job_id})
 
 
@@ -253,6 +269,12 @@ def profiles_show(name: str, profile_type: str) -> None:
     if data is None:
         _json_out({"name": name, "source": "builtin", "note": "This is a podcast-creator built-in profile; no local file to display."})
     else:
+        if profile_type == "episode":
+            warnings = validate_episode_profile(data)
+        else:
+            warnings = validate_speaker_profile(data)
+        if warnings:
+            data = {**data, "_warnings": warnings}
         _json_out(data)
 
 
@@ -261,6 +283,50 @@ def profiles_init() -> None:
     """Copy default profiles to ~/.gen-podcast/profiles/."""
     copied = init_profiles()
     _json_out({"copied": copied, "count": len(copied)})
+
+
+@main.group()
+def config() -> None:
+    """Manage default settings (~/.gen-podcast/config.json)."""
+    pass
+
+
+@config.command(name="show")
+def config_show() -> None:
+    """Show current config."""
+    _json_out(load_config())
+
+
+@config.command(name="set")
+@click.argument("key")
+@click.argument("value")
+def config_set(key: str, value: str) -> None:
+    """Set a config value. Valid keys: episode_profile, speaker_profile, output_dir, timeout, outline_provider, outline_model, transcript_provider, transcript_model, tts_provider, tts_model."""
+    try:
+        set_config(key, value)
+        _json_out({"key": key, "value": value})
+    except ValueError as e:
+        _json_out({"error": str(e)})
+        sys.exit(2)
+
+
+@config.command(name="unset")
+@click.argument("key")
+def config_unset(key: str) -> None:
+    """Remove a config value."""
+    try:
+        removed = unset_config(key)
+        _json_out({"key": key, "removed": removed})
+    except ValueError as e:
+        _json_out({"error": str(e)})
+        sys.exit(2)
+
+
+@config.command(name="reset")
+def config_reset() -> None:
+    """Delete the config file."""
+    reset_config()
+    _json_out({"reset": True})
 
 
 if __name__ == "__main__":

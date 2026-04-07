@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 JOBS_DIR = Path.home() / ".gen-podcast" / "jobs"
+OUTPUT_DIR = Path.home() / ".gen-podcast" / "output"
 
 VALID_STATUSES = frozenset(
     {
@@ -141,10 +143,11 @@ def latest_job() -> JobStatus | None:
     return jobs[0] if jobs else None
 
 
-def delete_job(job_id: str) -> bool:
+def delete_job(job_id: str, include_output: bool = False) -> bool:
     """Delete job files for the given job ID.
 
     Removes <job_id>.json, <job_id>.log, and <job_id>.content from JOBS_DIR.
+    If include_output=True, also removes OUTPUT_DIR/<job_id>/ recursively.
     Returns True if the .json file existed and was deleted, False otherwise.
     """
     json_path = JOBS_DIR / f"{job_id}.json"
@@ -155,15 +158,26 @@ def delete_job(job_id: str) -> bool:
             path.unlink()
         except FileNotFoundError:
             pass
+    if include_output:
+        out = OUTPUT_DIR / job_id
+        # Guard against path traversal via crafted job IDs
+        try:
+            out_resolved = out.resolve()
+            output_dir_resolved = OUTPUT_DIR.resolve()
+            if out_resolved.parent == output_dir_resolved and out_resolved.exists():
+                shutil.rmtree(out_resolved)
+        except (ValueError, OSError):
+            pass  # ignore resolution errors on unusual paths
     return existed
 
 
-def cleanup_jobs(older_than_days: int = 30, terminal_only: bool = True) -> list[str]:
+def cleanup_jobs(older_than_days: int = 30, terminal_only: bool = True, include_output: bool = False) -> list[str]:
     """Delete jobs older than the given number of days.
 
     Args:
         older_than_days: Age threshold in days (compared against started_at).
         terminal_only: When True, only delete jobs in TERMINAL_STATUSES.
+        include_output: When True, also remove output directories.
 
     Returns:
         List of deleted job IDs.
@@ -181,8 +195,11 @@ def cleanup_jobs(older_than_days: int = 30, terminal_only: bool = True) -> list[
             continue
         if terminal_only and job.status not in TERMINAL_STATUSES:
             continue
-        started = datetime.fromisoformat(job.started_at)
+        try:
+            started = datetime.fromisoformat(job.started_at)
+        except ValueError:
+            continue  # skip jobs with malformed timestamps
         if started.timestamp() < cutoff:
-            if delete_job(job.id):
+            if delete_job(job.id, include_output=include_output):
                 deleted.append(job.id)
     return deleted
