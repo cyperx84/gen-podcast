@@ -57,15 +57,47 @@ def load_speaker_profile(name: str) -> dict | None:
     return _find_profile("speakers", name)
 
 
+def is_valid_episode_profile(name: str) -> bool:
+    """Return True if name is a known episode profile (builtin, default, or user)."""
+    if name in BUILTIN_EPISODE_PROFILES:
+        return True
+    return _find_profile("episodes", name) is not None
+
+
+def is_valid_speaker_profile(name: str) -> bool:
+    """Return True if name is a known speaker profile (builtin, default, or user)."""
+    if name in BUILTIN_SPEAKER_PROFILES:
+        return True
+    return _find_profile("speakers", name) is not None
+
+
+SECRETS_DIR = Path.home() / ".openclaw" / "secrets"
+
+
+def _get_api_key(provider: str) -> str | None:
+    """Get API key from env var, falling back to ~/.openclaw/secrets/."""
+    env_var = PROVIDER_KEY_MAP.get(provider.lower())
+    if not env_var:
+        return None
+    # Try env first
+    key = os.environ.get(env_var)
+    if key:
+        return key
+    # Fall back to secrets file
+    secret_name = env_var.lower().replace("_api_key", "-api-key").replace("_", "-")
+    secret_file = SECRETS_DIR / secret_name
+    if secret_file.exists():
+        return secret_file.read_text().strip()
+    return None
+
+
 def _inject_key_for_provider(config: dict, provider: str | None) -> None:
-    """Inject API key from env for a given provider into a config dict."""
+    """Inject API key for a given provider into a config dict."""
     if not provider:
         return
-    env_var = PROVIDER_KEY_MAP.get(provider.lower())
-    if env_var:
-        key = os.environ.get(env_var)
-        if key:
-            config["api_key"] = key
+    key = _get_api_key(provider.lower())
+    if key:
+        config["api_key"] = key
 
 
 def inject_api_keys(episode: dict | None, speaker: dict | None) -> None:

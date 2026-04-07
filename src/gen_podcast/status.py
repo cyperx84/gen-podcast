@@ -50,6 +50,15 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def is_process_alive(pid: int) -> bool:
+    """Return True if the process with the given PID is alive."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
 def _job_path(job_id: str) -> Path:
     return JOBS_DIR / f"{job_id}.json"
 
@@ -124,3 +133,50 @@ def latest_job() -> JobStatus | None:
     """Return the most recently created job."""
     jobs = list_jobs(limit=1)
     return jobs[0] if jobs else None
+
+
+def delete_job(job_id: str) -> bool:
+    """Delete job files for the given job ID.
+
+    Removes <job_id>.json, <job_id>.log, and <job_id>.content from JOBS_DIR.
+    Returns True if the .json file existed and was deleted, False otherwise.
+    """
+    json_path = JOBS_DIR / f"{job_id}.json"
+    existed = json_path.exists()
+    for suffix in (".json", ".log", ".content"):
+        path = JOBS_DIR / f"{job_id}{suffix}"
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    return existed
+
+
+def cleanup_jobs(older_than_days: int = 30, terminal_only: bool = True) -> list[str]:
+    """Delete jobs older than the given number of days.
+
+    Args:
+        older_than_days: Age threshold in days (compared against started_at).
+        terminal_only: When True, only delete jobs in TERMINAL_STATUSES.
+
+    Returns:
+        List of deleted job IDs.
+    """
+    JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    cutoff = datetime.now(timezone.utc).timestamp() - older_than_days * 86400
+    deleted: list[str] = []
+    for path in JOBS_DIR.glob("*.json"):
+        if path.name.endswith(".tmp"):
+            continue
+        try:
+            data = json.loads(path.read_text())
+            job = JobStatus.from_dict(data)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if terminal_only and job.status not in TERMINAL_STATUSES:
+            continue
+        started = datetime.fromisoformat(job.started_at)
+        if started.timestamp() < cutoff:
+            if delete_job(job.id):
+                deleted.append(job.id)
+    return deleted

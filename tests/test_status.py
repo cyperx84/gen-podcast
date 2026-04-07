@@ -50,6 +50,7 @@ class TestUpdateJob:
 
         # Verify persisted
         reloaded = mod.read_job("j1")
+        assert reloaded is not None
         assert reloaded.status == "running"
 
     def test_update_missing_raises(self, tmp_jobs_dir):
@@ -106,7 +107,9 @@ class TestLatestJob:
     def test_latest_returns_most_recent(self, tmp_jobs_dir):
         mod.create_job("old", {})
         mod.create_job("new", {})
-        assert mod.latest_job().id == "new"
+        latest = mod.latest_job()
+        assert latest is not None
+        assert latest.id == "new"
 
 
 class TestAtomicWrite:
@@ -114,3 +117,85 @@ class TestAtomicWrite:
         mod.create_job("j1", {})
         tmp_files = list(tmp_jobs_dir.glob("*.tmp"))
         assert tmp_files == []
+
+
+class TestIsProcessAlive:
+    def test_alive_process(self):
+        import os
+        # Current process is always alive
+        assert mod.is_process_alive(os.getpid()) is True
+
+    def test_dead_process(self, monkeypatch):
+        def fake_kill(pid, sig):
+            raise ProcessLookupError
+        monkeypatch.setattr("os.kill", fake_kill)
+        assert mod.is_process_alive(99999) is False
+
+    def test_permission_error(self, monkeypatch):
+        def fake_kill(pid, sig):
+            raise PermissionError
+        monkeypatch.setattr("os.kill", fake_kill)
+        # PermissionError means process exists but we can't signal it
+        assert mod.is_process_alive(1) is False
+
+
+class TestDeleteJob:
+    def test_deletes_json(self, tmp_jobs_dir):
+        mod.create_job("del1", {})
+        assert (tmp_jobs_dir / "del1.json").exists()
+        result = mod.delete_job("del1")
+        assert result is True
+        assert not (tmp_jobs_dir / "del1.json").exists()
+
+    def test_returns_false_for_missing(self, tmp_jobs_dir):
+        assert mod.delete_job("ghost") is False
+
+    def test_deletes_log_and_content(self, tmp_jobs_dir):
+        mod.create_job("del2", {})
+        (tmp_jobs_dir / "del2.log").write_text("log")
+        (tmp_jobs_dir / "del2.content").write_text("content")
+        mod.delete_job("del2")
+        assert not (tmp_jobs_dir / "del2.log").exists()
+        assert not (tmp_jobs_dir / "del2.content").exists()
+
+    def test_tolerates_missing_log(self, tmp_jobs_dir):
+        mod.create_job("del3", {})
+        # no .log or .content file — should not raise
+        result = mod.delete_job("del3")
+        assert result is True
+
+
+class TestCleanupJobs:
+    def _make_old_job(self, job_id, days_ago, terminal=True):
+        """Create a job with started_at backdated by days_ago."""
+        from datetime import datetime, timezone, timedelta
+        job = mod.create_job(job_id, {})
+        old_time = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+        if terminal:
+            mod.update_job(job_id, status="completed", started_at=old_time, completed_at=old_time)
+        else:
+            mod.update_job(job_id, started_at=old_time)
+        return job
+
+    def test_deletes_old_terminal_jobs(self, tmp_jobs_dir):
+        self._make_old_job("old1", days_ago=40, terminal=True)
+        self._make_old_job("old2", days_ago=35, terminal=True)
+        deleted = mod.cleanup_jobs(older_than_days=30)
+        assert set(deleted) == {"old1", "old2"}
+        assert not (tmp_jobs_dir / "old1.json").exists()
+
+    def test_keeps_recent_jobs(self, tmp_jobs_dir):
+        self._make_old_job("recent", days_ago=5, terminal=True)
+        deleted = mod.cleanup_jobs(older_than_days=30)
+        assert deleted == []
+        assert (tmp_jobs_dir / "recent.json").exists()
+
+    def test_skips_non_terminal_by_default(self, tmp_jobs_dir):
+        self._make_old_job("running_old", days_ago=40, terminal=False)
+        deleted = mod.cleanup_jobs(older_than_days=30, terminal_only=True)
+        assert deleted == []
+
+    def test_all_statuses_flag(self, tmp_jobs_dir):
+        self._make_old_job("running_old", days_ago=40, terminal=False)
+        deleted = mod.cleanup_jobs(older_than_days=30, terminal_only=False)
+        assert "running_old" in deleted

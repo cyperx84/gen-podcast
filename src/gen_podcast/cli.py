@@ -6,12 +6,13 @@ import asyncio
 import json
 import sys
 import time
+import uuid
 
 import click
 
-from gen_podcast.profiles import init_profiles, list_profiles, load_episode_profile, load_speaker_profile
+from gen_podcast.profiles import init_profiles, is_valid_episode_profile, is_valid_speaker_profile, list_profiles, load_episode_profile, load_speaker_profile
 from gen_podcast.runner import is_job_done, run_foreground, spawn_background
-from gen_podcast.status import latest_job, list_jobs, read_job
+from gen_podcast.status import cleanup_jobs, create_job, delete_job, is_process_alive, latest_job, list_jobs, read_job, update_job
 
 
 def _json_out(data: object) -> None:
@@ -48,6 +49,7 @@ def main() -> None:
 @click.option("--foreground", is_flag=True, help="Run synchronously (default: background)")
 @click.option("--job-id", default=None, help="Resume existing job (internal use)")
 @click.option("--output-dir", default=None, type=click.Path(), help="Override output location")
+@click.option("--timeout", default=3600, type=int, help="Generation timeout in seconds (0 = no timeout)")
 def generate(
     content: str | None,
     content_file: str | None,
@@ -66,6 +68,7 @@ def generate(
     foreground: bool,
     job_id: str | None,
     output_dir: str | None,
+    timeout: int,
 ) -> None:
     """Generate a podcast from content."""
     # Resolve content
@@ -73,7 +76,8 @@ def generate(
     if use_stdin:
         resolved_content = sys.stdin.read()
     elif content_file:
-        resolved_content = open(content_file).read()
+        with open(content_file) as f:
+            resolved_content = f.read()
     elif content:
         resolved_content = content
 
@@ -83,7 +87,17 @@ def generate(
 
     # Resolve briefing
     if briefing_file:
-        briefing = open(briefing_file).read()
+        with open(briefing_file) as f:
+            briefing = f.read()
+
+    # Validate profile names early (only if not a background-resumed job)
+    if not job_id:
+        if not is_valid_episode_profile(episode_profile):
+            _json_out({"error": f"Unknown episode profile: {episode_profile!r}. Run 'gen-podcast profiles list' to see available profiles."})
+            sys.exit(2)
+        if speaker_profile and not is_valid_speaker_profile(speaker_profile):
+            _json_out({"error": f"Unknown speaker profile: {speaker_profile!r}. Run 'gen-podcast profiles list' to see available profiles."})
+            sys.exit(2)
 
     # Build model overrides
     model_overrides: dict[str, str] = {}
@@ -102,12 +116,8 @@ def generate(
 
     if foreground:
         # Synchronous execution
-        import uuid
-
         jid = job_id or uuid.uuid4().hex[:12]
         if not job_id:
-            from gen_podcast.status import create_job
-
             config = {
                 "episode_profile": episode_profile,
                 "speaker_profile": speaker_profile,
@@ -127,6 +137,7 @@ def generate(
                 name=name,
                 model_overrides=model_overrides or None,
                 output_dir=output_dir,
+                timeout=timeout or None,
             )
         )
         _json_out(result)
@@ -143,6 +154,7 @@ def generate(
             name=name,
             model_overrides=model_overrides or None,
             output_dir=output_dir,
+            timeout=timeout or None,
         )
         _json_out({"job_id": jid, "status": "queued"})
 
@@ -173,6 +185,12 @@ def status(job_id: str | None, latest: bool, wait: bool, poll_interval: int) -> 
     if not job:
         _json_out({"error": f"Job {job_id} not found"})
         sys.exit(1)
+
+    # Mark zombie jobs as failed if process is no longer alive
+    if job.status not in ("completed", "failed") and job.pid is not None:
+        if not is_process_alive(job.pid):
+            job = update_job(job.id, status="failed", error="Process died unexpectedly (PID no longer alive)")
+
     _json_out(job.to_dict())
 
 
@@ -183,6 +201,27 @@ def list_cmd(status_filter: str | None, limit: int) -> None:
     """List jobs."""
     jobs = list_jobs(status_filter=status_filter, limit=limit)
     _json_out([j.to_dict() for j in jobs])
+
+
+@main.command()
+@click.option("--days", default=30, type=int, help="Delete jobs older than this many days")
+@click.option("--all-statuses", is_flag=True, help="Include non-terminal jobs (default: terminal only)")
+def cleanup(days: int, all_statuses: bool) -> None:
+    """Delete old job files."""
+    deleted = cleanup_jobs(older_than_days=days, terminal_only=not all_statuses)
+    _json_out({"deleted": deleted, "count": len(deleted)})
+
+
+@main.command()
+@click.argument("job_id")
+def delete(job_id: str) -> None:
+    """Delete a job and its associated files."""
+    removed = delete_job(job_id)
+    if removed:
+        _json_out({"deleted": job_id})
+    else:
+        _json_out({"error": f"Job {job_id} not found"})
+        sys.exit(1)
 
 
 @main.group()
