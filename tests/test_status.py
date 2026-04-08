@@ -200,6 +200,25 @@ class TestCleanupJobs:
         deleted = mod.cleanup_jobs(older_than_days=30, terminal_only=False)
         assert "running_old" in deleted
 
+    def test_ignores_malformed_files(self, tmp_jobs_dir):
+        """Malformed JSON in JOBS_DIR must not crash cleanup_jobs."""
+        self._make_old_job("good_old", days_ago=40, terminal=True)
+        (tmp_jobs_dir / "bad.json").write_text("not json {{{")
+        deleted = mod.cleanup_jobs(older_than_days=30)
+        # Good old job is still deleted; malformed one is skipped gracefully
+        assert "good_old" in deleted
+        # The malformed file is left in place (not accidentally "deleted")
+        assert (tmp_jobs_dir / "bad.json").exists()
+
+    def test_mixed_terminal_and_non_terminal(self, tmp_jobs_dir):
+        """With terminal_only=True, only completed/failed are deleted."""
+        self._make_old_job("old_done", days_ago=40, terminal=True)
+        self._make_old_job("old_running", days_ago=40, terminal=False)
+        deleted = mod.cleanup_jobs(older_than_days=30, terminal_only=True)
+        assert deleted == ["old_done"]
+        assert (tmp_jobs_dir / "old_running.json").exists()
+        assert not (tmp_jobs_dir / "old_done.json").exists()
+
 
 @pytest.fixture
 def tmp_output_dir(tmp_path, monkeypatch):
@@ -240,6 +259,26 @@ class TestDeleteJobWithOutput:
         # No output dir created for this job
         result = mod.delete_job("out3", include_output=True)
         assert result is True
+
+    def test_include_output_swallows_rmtree_oserror(
+        self, tmp_jobs_dir, tmp_output_dir, monkeypatch
+    ):
+        """If rmtree raises OSError (e.g. EBUSY, permissions), delete_job still succeeds."""
+        mod.create_job("out_err", {})
+        mod.update_job("out_err", status="completed")
+        job_out = tmp_output_dir / "out_err"
+        job_out.mkdir()
+        (job_out / "episode.mp3").write_text("audio")
+
+        def boom(path):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr("shutil.rmtree", boom)
+
+        # Should not raise, .json file should still be deleted
+        result = mod.delete_job("out_err", include_output=True)
+        assert result is True
+        assert not (tmp_jobs_dir / "out_err.json").exists()
 
 
 class TestCleanupJobsWithOutput:
@@ -286,3 +325,27 @@ class TestCleanupJobsWithOutput:
         # Should not raise, should just skip the malformed job
         deleted = mod.cleanup_jobs(older_than_days=0)
         assert "bad_date" not in deleted
+
+
+class TestJobStatusFromDict:
+    def test_drops_unknown_keys(self):
+        """Forward-compat: unknown keys in persisted JSON should not crash."""
+        data = {
+            "id": "j1",
+            "status": "queued",
+            "started_at": "2025-01-01T00:00:00+00:00",
+            "updated_at": "2025-01-01T00:00:00+00:00",
+            "future_field": "ignore me",
+        }
+        job = mod.JobStatus.from_dict(data)
+        assert job.id == "j1"
+        assert not hasattr(job, "future_field")
+
+
+class TestListJobsNoDir:
+    def test_missing_dir_returns_empty(self, tmp_path, monkeypatch):
+        """list_jobs should create JOBS_DIR on demand and return []."""
+        missing = tmp_path / "does_not_exist_yet"
+        monkeypatch.setattr(mod, "JOBS_DIR", missing)
+        assert mod.list_jobs() == []
+        assert missing.exists()

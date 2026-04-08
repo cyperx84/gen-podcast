@@ -80,6 +80,63 @@ class TestGenerate:
         data = json.loads(result.output)
         assert data["job_id"] == "stdin123"
 
+    def test_briefing_file(self, runner, tmp_path):
+        briefing_file = tmp_path / "brief.txt"
+        briefing_file.write_text("discuss the content carefully")
+
+        with patch("gen_podcast.cli.spawn_background", return_value="bf123") as spawn:
+            result = runner.invoke(
+                main,
+                ["generate", "--content", "hi", "--briefing-file", str(briefing_file)],
+            )
+        assert result.exit_code == 0
+        # spawn_background should receive the file's contents as briefing
+        assert spawn.call_args.kwargs["briefing"] == "discuss the content carefully"
+
+    def test_model_override_flags_forwarded(self, runner):
+        with patch("gen_podcast.cli.spawn_background", return_value="mo123") as spawn:
+            result = runner.invoke(
+                main,
+                [
+                    "generate",
+                    "--content", "hi",
+                    "--outline-provider", "openai",
+                    "--outline-model", "gpt-4",
+                    "--transcript-provider", "anthropic",
+                    "--transcript-model", "claude-3",
+                    "--tts-provider", "elevenlabs",
+                    "--tts-model", "eleven_v2",
+                ],
+            )
+        assert result.exit_code == 0
+        overrides = spawn.call_args.kwargs["model_overrides"]
+        assert overrides == {
+            "outline_provider": "openai",
+            "outline_model": "gpt-4",
+            "transcript_provider": "anthropic",
+            "transcript_model": "claude-3",
+            "tts_provider": "elevenlabs",
+            "tts_model": "eleven_v2",
+        }
+
+    def test_foreground_failed_result_exits_1(self, runner):
+        async def mock_run(**kwargs):
+            return {"id": "j1", "status": "failed", "error": "boom"}
+
+        with patch("gen_podcast.cli.run_foreground", side_effect=mock_run):
+            result = runner.invoke(
+                main,
+                ["generate", "--content", "hi", "--foreground"],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 1
+
+    def test_empty_content_exits_2(self, runner):
+        result = runner.invoke(main, ["generate", "--content", "   "])
+        assert result.exit_code == 2
+        data = json.loads(result.output)
+        assert "error" in data
+
 
 class TestStatus:
     def test_status_by_id(self, runner, tmp_jobs_dir):
@@ -106,6 +163,38 @@ class TestStatus:
         result = runner.invoke(main, ["status"])
         assert result.exit_code == 2
 
+    def test_status_latest_no_jobs(self, runner, tmp_jobs_dir):
+        result = runner.invoke(main, ["status", "--latest"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert "error" in data
+        assert "No jobs" in data["error"]
+
+    def test_status_wait_polls_until_done(self, runner, tmp_jobs_dir, monkeypatch):
+        status_mod.create_job("wj", {})
+        status_mod.update_job("wj", status="running")
+
+        call_count = {"n": 0}
+
+        def fake_is_done(job_id):
+            call_count["n"] += 1
+            if call_count["n"] >= 3:
+                status_mod.update_job("wj", status="completed")
+                return True
+            return False
+
+        monkeypatch.setattr("gen_podcast.cli.is_job_done", fake_is_done)
+        monkeypatch.setattr("gen_podcast.cli.time.sleep", lambda s: None)
+
+        result = runner.invoke(main, ["status", "wj", "--wait", "--poll-interval", "0"])
+        assert result.exit_code == 0
+        assert call_count["n"] >= 3
+        # extract JSON from stdout (stderr may be mixed in)
+        output = result.output
+        json_start = output.index("{")
+        data = json.loads(output[json_start:])
+        assert data["status"] == "completed"
+
 
 class TestList:
     def test_list_empty(self, runner):
@@ -131,6 +220,49 @@ class TestProfiles:
 
     def test_profiles_show_builtin(self, runner):
         result = runner.invoke(main, ["profiles", "show", "tech_discussion"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["source"] == "builtin"
+
+    def test_profiles_show_from_file(self, runner, tmp_path, monkeypatch):
+        from gen_podcast import profiles as prof_mod
+
+        defaults_dir = tmp_path / "defaults"
+        (defaults_dir / "episodes").mkdir(parents=True)
+        (defaults_dir / "episodes" / "fancy.json").write_text(
+            json.dumps({"name": "fancy", "num_segments": 5})
+        )
+        (defaults_dir / "speakers").mkdir(parents=True)
+        monkeypatch.setattr(prof_mod, "DEFAULTS_DIR", defaults_dir)
+        monkeypatch.setattr(prof_mod, "USER_PROFILES_DIR", tmp_path / "user")
+
+        result = runner.invoke(main, ["profiles", "show", "fancy"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["name"] == "fancy"
+        assert data["num_segments"] == 5
+
+    def test_profiles_show_speaker_type(self, runner, tmp_path, monkeypatch):
+        from gen_podcast import profiles as prof_mod
+
+        defaults_dir = tmp_path / "defaults"
+        (defaults_dir / "episodes").mkdir(parents=True)
+        (defaults_dir / "speakers").mkdir(parents=True)
+        (defaults_dir / "speakers" / "duo.json").write_text(
+            json.dumps({"voices": ["a", "b"]})
+        )
+        monkeypatch.setattr(prof_mod, "DEFAULTS_DIR", defaults_dir)
+        monkeypatch.setattr(prof_mod, "USER_PROFILES_DIR", tmp_path / "user")
+
+        result = runner.invoke(main, ["profiles", "show", "duo", "--type", "speaker"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["voices"] == ["a", "b"]
+
+    def test_profiles_show_speaker_builtin(self, runner):
+        result = runner.invoke(
+            main, ["profiles", "show", "tech_experts", "--type", "speaker"]
+        )
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["source"] == "builtin"
@@ -310,6 +442,13 @@ class TestConfigCommands:
         result = runner.invoke(main, ["config", "show"])
         data = json.loads(result.output)
         assert "episode_profile" not in data
+
+    def test_config_unset_bad_key_exits_2(self, runner):
+        result = runner.invoke(main, ["config", "unset", "invalid_key"])
+        assert result.exit_code == 2
+        data = json.loads(result.output)
+        assert "error" in data
+        assert "invalid_key" in data["error"]
 
     def test_config_reset(self, runner):
         runner.invoke(main, ["config", "set", "episode_profile", "tech_discussion"])
