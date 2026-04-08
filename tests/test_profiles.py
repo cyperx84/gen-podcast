@@ -211,3 +211,85 @@ class TestValidateSpeakerProfile:
         data["speakers"] = "not_a_list"
         errors = mod.validate_speaker_profile(data)
         assert any("speakers" in e for e in errors)
+
+
+class TestGetApiKey:
+    def test_unknown_provider_returns_none(self, monkeypatch, tmp_path):
+        # Ensure no unexpected env or secrets files interfere.
+        monkeypatch.setattr(mod, "SECRETS_DIR", tmp_path / "secrets")
+        assert mod._get_api_key("not_a_provider") is None
+
+    def test_secrets_file_fallback(self, monkeypatch, tmp_path):
+        # Unset env var so the file fallback is exercised.
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        secrets = tmp_path / "secrets"
+        secrets.mkdir()
+        (secrets / "openai-api-key").write_text("sk-from-file\n")
+        monkeypatch.setattr(mod, "SECRETS_DIR", secrets)
+
+        assert mod._get_api_key("openai") == "sk-from-file"
+
+    def test_env_var_beats_secrets_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        secrets = tmp_path / "secrets"
+        secrets.mkdir()
+        (secrets / "openai-api-key").write_text("sk-from-file")
+        monkeypatch.setattr(mod, "SECRETS_DIR", secrets)
+
+        assert mod._get_api_key("openai") == "sk-from-env"
+
+    def test_no_env_no_file_returns_none(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr(mod, "SECRETS_DIR", tmp_path / "empty")
+        assert mod._get_api_key("openai") is None
+
+    def test_provider_case_insensitive(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anth")
+        assert mod._get_api_key("ANTHROPIC") == "sk-anth"
+
+
+class TestInjectKeyForProviderDirect:
+    def test_no_provider_is_noop(self):
+        config: dict = {}
+        mod._inject_key_for_provider(config, None)
+        assert config == {}
+
+    def test_empty_provider_is_noop(self):
+        config: dict = {}
+        mod._inject_key_for_provider(config, "")
+        assert config == {}
+
+
+class TestInjectApiKeysNoKeyAvailable:
+    def test_does_not_set_api_key_when_lookup_fails(self, monkeypatch, tmp_path):
+        """If provider has no env var AND no secrets file, api_key must not be injected."""
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr(mod, "SECRETS_DIR", tmp_path / "empty")
+
+        episode = {"outline_provider": "openai"}
+        mod.inject_api_keys(episode, None)
+
+        # outline_config may be created, but should NOT contain api_key
+        outline_config = episode.get("outline_config", {})
+        assert "api_key" not in outline_config
+
+
+class TestInitProfilesMissingSubdir:
+    def test_skips_missing_source_subdir(self, tmp_path, monkeypatch):
+        """init_profiles should continue when a source subdir doesn't exist."""
+        # Use a fresh subdirectory to bypass the module-level autouse fixture
+        # that pre-creates both defaults/episodes and defaults/speakers.
+        base = tmp_path / "fresh"
+        user_dir = base / "user_profiles"
+        defaults_dir = base / "defaults"
+        # Only create the episodes subdir, not speakers.
+        (defaults_dir / "episodes").mkdir(parents=True)
+        _write_profile(defaults_dir, "episodes", "ep1", {"name": "ep1"})
+
+        monkeypatch.setattr(mod, "USER_PROFILES_DIR", user_dir)
+        monkeypatch.setattr(mod, "DEFAULTS_DIR", defaults_dir)
+
+        # Should not raise even though defaults/speakers doesn't exist.
+        copied = mod.init_profiles()
+        assert len(copied) == 1
+        assert "ep1.json" in copied[0]
