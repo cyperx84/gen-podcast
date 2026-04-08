@@ -260,6 +260,26 @@ class TestDeleteJobWithOutput:
         result = mod.delete_job("out3", include_output=True)
         assert result is True
 
+    def test_include_output_swallows_rmtree_oserror(
+        self, tmp_jobs_dir, tmp_output_dir, monkeypatch
+    ):
+        """If rmtree raises OSError (e.g. EBUSY, permissions), delete_job still succeeds."""
+        mod.create_job("out_err", {})
+        mod.update_job("out_err", status="completed")
+        job_out = tmp_output_dir / "out_err"
+        job_out.mkdir()
+        (job_out / "episode.mp3").write_text("audio")
+
+        def boom(path):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr("shutil.rmtree", boom)
+
+        # Should not raise, .json file should still be deleted
+        result = mod.delete_job("out_err", include_output=True)
+        assert result is True
+        assert not (tmp_jobs_dir / "out_err.json").exists()
+
 
 class TestCleanupJobsWithOutput:
     def _make_old_job(self, job_id, days_ago, terminal=True):

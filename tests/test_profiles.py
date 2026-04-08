@@ -247,6 +247,32 @@ class TestGetApiKey:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anth")
         assert mod._get_api_key("ANTHROPIC") == "sk-anth"
 
+    def test_legacy_secrets_dir_fallback(self, monkeypatch, tmp_path):
+        """When no env and no new secrets file, fall back to ~/.openclaw/secrets/."""
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        # New location empty
+        monkeypatch.setattr(mod, "SECRETS_DIR", tmp_path / "new_empty")
+        # Legacy location populated
+        legacy = tmp_path / "legacy"
+        legacy.mkdir()
+        (legacy / "openai-api-key").write_text("sk-legacy\n")
+        monkeypatch.setattr(mod, "_LEGACY_SECRETS_DIR", legacy)
+
+        assert mod._get_api_key("openai") == "sk-legacy"
+
+    def test_new_secrets_beats_legacy(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        new = tmp_path / "new"
+        new.mkdir()
+        (new / "openai-api-key").write_text("sk-new")
+        legacy = tmp_path / "legacy"
+        legacy.mkdir()
+        (legacy / "openai-api-key").write_text("sk-legacy")
+        monkeypatch.setattr(mod, "SECRETS_DIR", new)
+        monkeypatch.setattr(mod, "_LEGACY_SECRETS_DIR", legacy)
+
+        assert mod._get_api_key("openai") == "sk-new"
+
 
 class TestInjectKeyForProviderDirect:
     def test_no_provider_is_noop(self):

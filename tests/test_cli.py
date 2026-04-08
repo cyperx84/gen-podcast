@@ -443,6 +443,13 @@ class TestConfigCommands:
         data = json.loads(result.output)
         assert "episode_profile" not in data
 
+    def test_config_unset_bad_key_exits_2(self, runner):
+        result = runner.invoke(main, ["config", "unset", "invalid_key"])
+        assert result.exit_code == 2
+        data = json.loads(result.output)
+        assert "error" in data
+        assert "invalid_key" in data["error"]
+
     def test_config_reset(self, runner):
         runner.invoke(main, ["config", "set", "episode_profile", "tech_discussion"])
         result = runner.invoke(main, ["config", "reset"])

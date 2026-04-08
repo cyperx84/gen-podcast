@@ -63,6 +63,10 @@ class TestUnsetConfig:
         result = mod.unset_config("episode_profile")
         assert result is False
 
+    def test_raises_for_unknown_key(self, tmp_config):
+        with pytest.raises(ValueError, match="Unknown config key"):
+            mod.unset_config("nonexistent_key")
+
 
 class TestResetConfig:
     def test_deletes_file(self, tmp_config):
