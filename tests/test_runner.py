@@ -1,7 +1,7 @@
 """Tests for runner.py: foreground execution, background spawning, and helpers."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
